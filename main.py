@@ -8,25 +8,27 @@ Controls
   SPACE     hold to charge plunger, release to fire
   Z / ←     left flipper
   X / →     right flipper
-  F         toggle fullscreen
   R         restart  (game over)
   ESC       quit
 """
 
-import pygame, sys, math, random, struct, wave, io
+import asyncio
+import pygame, math, random, struct, wave, io
 pygame.init()
-pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
+try:
+    pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
+except pygame.error:
+    # Browsers may defer audio until the player interacts with the game.
+    pass
 
 # ── Screen ─────────────────────────────────────────────────────────────────────
-INFO     = pygame.display.Info()
-NATIVE_W = INFO.current_w
-NATIVE_H = INFO.current_h
 LW, LH   = 560, 980          # logical playfield
 
-screen = pygame.display.set_mode((NATIVE_W, NATIVE_H),
-                                  pygame.FULLSCREEN | pygame.SCALED)
+# A fixed canvas works consistently in desktop browsers and on GitHub Pages.
+# Browser fullscreen, when wanted, should be requested by the page after a
+# player gesture rather than when the application starts.
+screen = pygame.display.set_mode((LW, LH))
 pygame.display.set_caption("Antigen Pinball – Immune System")
-clock = pygame.time.Clock()
 
 # ── Colours ────────────────────────────────────────────────────────────────────
 BG       = (6,  10, 24)
@@ -604,7 +606,7 @@ def ring_flash(particles, x, y, col):
 #  TITLE SCREEN
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_title():
+async def run_title():
     t    = 0.0
     done = False
     # animated floating viruses
@@ -619,10 +621,10 @@ def run_title():
     while not done:
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
-                pygame.quit(); sys.exit()
+                return False
             if ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_ESCAPE:
-                    pygame.quit(); sys.exit()
+                    return False
                 done = True
             if ev.type == pygame.MOUSEBUTTONDOWN:
                 done = True
@@ -651,7 +653,7 @@ def run_title():
         # controls summary
         tc(surf, "Z/←  left flipper     X/→  right flipper", F12, DIM, LW//2, LH//2+20)
         tc(surf, "SPACE = charge & fire plunger",             F12, DIM, LW//2, LH//2+42)
-        tc(surf, "F = fullscreen    ESC = quit",              F10, DIM, LW//2, LH//2+64)
+        tc(surf, "ESC = quit",                                F10, DIM, LW//2, LH//2+64)
         # difficulty hint
         tc(surf, "Hit immune cells to build multiplier — reach the VIRUS!", F12, (100,160,200), LW//2, LH//2+100)
         # cell legend
@@ -665,7 +667,9 @@ def run_title():
             surf.blit(ts, (lx2+8-ts.get_width()//2, LH//2+150))
         pygame.display.flip()
         t += 0.016
-        clock.tick(60)
+        # Yield to the browser every frame so it can paint and handle input.
+        await asyncio.sleep(0)
+    return True
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  GAME STATE
@@ -1150,8 +1154,7 @@ def draw(g, surf):
            F12, (120,200,255), LW//2, LH//2-18)
         tc(surf, "Z/←  left flipper          X/→  right flipper",
            F12, (90,160,220),  LW//2, LH//2+6)
-        tc(surf, "F = fullscreen     ESC = quit",
-           F10, DIM,            LW//2, LH//2+26)
+        tc(surf, "ESC = quit", F10, DIM, LW//2, LH//2+26)
 
     # ── game over overlay ─────────────────────────────────────────────────────
     if g.game_over:
@@ -1172,23 +1175,20 @@ def draw(g, surf):
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
-def main():
-    run_title()
+async def main():
+    if not await run_title():
+        pygame.quit()
+        return
     g          = Game()
-    fullscreen = True
-    while True:
+    running = True
+    while running:
         keys = pygame.key.get_pressed()
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
-                pygame.quit(); sys.exit()
+                running = False
             if ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_ESCAPE:
-                    pygame.quit(); sys.exit()
-                if ev.key == pygame.K_f:
-                    fullscreen = not fullscreen
-                    pygame.display.set_mode(
-                        (NATIVE_W, NATIVE_H) if fullscreen else (int(LW*1.1), LH),
-                        (pygame.FULLSCREEN | pygame.SCALED) if fullscreen else pygame.SCALED)
+                    running = False
                 if ev.key == pygame.K_SPACE and not g.ball and not g.game_over:
                     g.launch()
                 if ev.key == pygame.K_r and g.game_over:
@@ -1196,7 +1196,9 @@ def main():
 
         g.update(keys)
         draw(g, pygame.display.get_surface())
-        clock.tick(60)
+        # Do not use clock.tick() here: WebAssembly games must yield each frame.
+        await asyncio.sleep(0)
+    pygame.quit()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
